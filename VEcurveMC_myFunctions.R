@@ -2,6 +2,7 @@ library(MASS)
 library(mvtnorm)
 library(osDesign)
 library(np)
+library(splines)
 
 # determine beta_0 to achieve a prespecified marginal probability of infection in the placebo group
 # 'scenario' is one of "A1" and "A2"
@@ -185,11 +186,38 @@ hNum <- function(s0, s1, tpsFit, npcdensFit1, npcdensFit2){
   return(phat.s0*fhat.s0*ghat.s0)
 }
 
+# 'phNum' returns function values at s0 of the integrand in the numerator of risk_{(0)}(s_1)
+# s0 is a numeric vector, whereas s1 is a scalar
+# 'phNum' uses parametric (Gaussian) density estimation, whereas 'hNum' uses nonparametric kernel density estimation
+phNum <- function(s0, s1, tpsFit, lmFit1, lmFit2){
+  phat.s0 <- tpsPredict(tpsFit, cbind(1, s0))
+  fMean.s0 <- predict(lmFit1, newdata=data.frame(Sb=s0))
+  fSD.s0 <- summary(lmFit1)$sigma
+  fhat.s0 <- dnorm(s1, mean=fMean.s0, sd=fSD.s0)
+  gMean.s0 <- predict(lmFit2, newdata=data.frame(1))
+  gSD.s0 <- summary(lmFit2)$sigma
+  ghat.s0 <- dnorm(s0, mean=gMean.s0, sd=gSD.s0)
+  return(phat.s0*fhat.s0*ghat.s0)
+}
+
 # 'hDen' returns function values at s0 of the integrand in the denominator of risk_{(0)}(s_1)
 # s0 is a numeric vector, whereas s1, x.male, x.age, x.country are scalars
 hDen <- function(s0, s1, npcdensFit1, npcdensFit2){
   fhat.s0 <- predict(npcdensFit1, newdata=data.frame(Sb=s0, S1=s1))
   ghat.s0 <- predict(npcdensFit2, newdata=data.frame(S0=s0))
+  return(fhat.s0*ghat.s0)
+}
+
+# 'phDen' returns function values at s0 of the integrand in the denominator of risk_{(0)}(s_1)
+# s0 is a numeric vector, whereas s1 is a scalar
+# 'phDen' uses parametric (Gaussian) density estimation, whereas 'hDen' uses nonparametric kernel density estimation
+phDen <- function(s0, s1, lmFit1, lmFit2){
+  fMean.s0 <- predict(lmFit1, newdata=data.frame(Sb=s0))
+  fSD.s0 <- summary(lmFit1)$sigma
+  fhat.s0 <- dnorm(s1, mean=fMean.s0, sd=fSD.s0)
+  gMean.s0 <- predict(lmFit2, newdata=data.frame(1))
+  gSD.s0 <- summary(lmFit2)$sigma
+  ghat.s0 <- dnorm(s0, mean=gMean.s0, sd=gSD.s0)
   return(fhat.s0*ghat.s0)
 }
 
@@ -211,6 +239,25 @@ riskP <- function(s1, data, tpsFit, npcdensFit1, npcdensFit2){
   return(out)
 }
 
+# 'riskP' returns the value of risk_{(0)}(s1)
+# s1 is a scalar
+# 'pRiskP' uses parametric (Gaussian) density estimation, whereas 'riskP' uses nonparametric kernel density estimation
+pRiskP <- function(s1, data, tpsFit, lmFit1, lmFit2){
+  UL <- max(data$S0, na.rm=TRUE) + 0.2 # if integration over (0,Inf) fails, use (0,UL)
+  
+  num <- try(integrate(phNum, 0, Inf, s1=s1, tpsFit=tpsFit, lmFit1=lmFit1, lmFit2=lmFit2, subdivisions=2000)$value, silent=TRUE)
+  if (inherits(num, 'try-error')){
+    num <- try(integrate(phNum, 0, UL, s1=s1, tpsFit=tpsFit, lmFit1=lmFit1, lmFit2=lmFit2, subdivisions=2000)$value, silent=TRUE)
+  }
+  
+  den <- try(integrate(phDen, 0, UL, s1=s1, lmFit1=lmFit1, lmFit2=lmFit2, subdivisions=2000, rel.tol=30*.Machine$double.eps^0.25)$value, silent=TRUE)
+  
+  out <- NULL
+  if ((!inherits(num, 'try-error')) & (!inherits(den, 'try-error'))){ out <- num/den }
+  
+  return(out)
+}
+
 # 'riskV' returns the value of risk_{(1)}(s1)
 # s1 is a scalar
 riskV <- function(s1, data, dataI){
@@ -225,6 +272,17 @@ riskV <- function(s1, data, dataI){
 # s1 is a scalar
 estVE <- function(s1, data, dataI, tpsFit, npcdensFit1, npcdensFit2){ 
   riskPvalue <- riskP(s1, data, tpsFit, npcdensFit1, npcdensFit2)
+  
+  VE <- NA
+  if (!is.null(riskPvalue)){ VE <- 1 - riskV(s1, data, dataI)/riskPvalue }
+  
+  return(VE)
+}
+
+# 'pEstVE' returns the value of VE(s1)
+# s1 is a scalar
+pEstVE <- function(s1, data, dataI, tpsFit, lmFit1, lmFit2){
+  riskPvalue <- pRiskP(s1, data, tpsFit, lmFit1, lmFit2)
   
   VE <- NA
   if (!is.null(riskPvalue)){ VE <- 1 - riskV(s1, data, dataI)/riskPvalue }
@@ -284,6 +342,41 @@ VEcurve <- function(data, s1grid){
   ghat <- npudens(gbw)
   
   VEcurvePointEst <- sapply(s1grid, function(s1val){ estVE(s1val, data, dataI, fit1, fhat, ghat) })
+  
+  return(VEcurvePointEst)
+}
+
+# 'pVEcurve' is a "parametric" version of 'VEcurve' with parametric (Gaussian) estimates of conditional densities
+# 'pVEcurve' returns the estimated VE(s1) curve evaluated on the grid of the 's1grid' values
+# 'data' is a data frame with variables Z, Sb, S0, S1, and Y
+pVEcurve <- function(data, s1grid){
+  # extract the immunogenicity set
+  dataI <- subset(data, !is.na(S0) | !is.na(S1))
+  
+  # calculate the sampling weights
+  nPControls <- NROW(subset(data, Z==0 & Y==0))
+  wtPControls <- NROW(subset(data, Z==0 & Y==0))/NROW(subset(dataI, Z==0 & Y==0))
+  wtVControls <- NROW(subset(data, Z==1 & Y==0))/NROW(subset(dataI, Z==1 & Y==0))
+  
+  nPCases <- NROW(subset(data, Z==0 & Y==1))
+  wtPCases <- NROW(subset(data, Z==0 & Y==1))/NROW(subset(dataI, Z==0 & Y==1))
+  wtVCases <- NROW(subset(data, Z==1 & Y==1))/NROW(subset(dataI, Z==1 & Y==1))
+  group <- rep(1, NROW(subset(dataI, Z==0)))
+  
+  # weighted logistic regression model using the placebo group in the immunogenicity set
+  fit1 <- tps(Y ~ S0, data=subset(dataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+  
+  # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+  # sampling weights are incorporated
+  dataB <- subset(dataI, Z==1 & !is.na(Sb))
+  fLM <- lm(S1 ~ ns(Sb), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  
+  # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+  dataB <- subset(dataI, Z==0)
+  gLM <- lm(S0 ~ 1, data=dataB, weights=ifelse(dataB$Y==1, wtPCases, wtPControls))
+  
+  # a single VE(s1) curve
+  VEcurvePointEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, data, dataI, fit1, fLM, gLM) })
   
   return(VEcurvePointEst)
 }
@@ -433,6 +526,13 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
 getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
   return(VEcurve(data=data, s1grid=s1grid))
+}
+
+# 'getPestVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
+# parametric Gaussian density estimation is employed
+getPestVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  return(pVEcurve(data=data, s1grid=s1grid))
 }
 
 getCoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
