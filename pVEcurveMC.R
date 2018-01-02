@@ -7,7 +7,7 @@ rm(list=ls(all=TRUE))
 source("VEcurveMC_myFunctions.R")
 
 # the output files are large, therefore I prefer that we store them in this shared folder rather than push them to the remote GitHub repo
-outDir <- "h:/SCHARP/Sanofi/manuscript_VEcurveMethod/Routput"
+outDir <- "t:/vaccine/sanofipasteur/dengue/manuscript_VEcurveMethod/Routput"
 
 # the total sample size
 n <- 5000
