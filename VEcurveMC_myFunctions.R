@@ -387,7 +387,7 @@ pVEcurve <- function(data, s1grid){
 # 'nBoot' is the number of bootstrap iterations
 coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   # extract the immunogenicity set
-  dataI <- subset(data, !is.na(Sb))
+  dataI <- subset(data, !is.na(S0) | !is.na(S1))
   
   # extract subsets of controls ('dataControls') and cases ('dataCases') to be used for resampling
   # in addition, within each treatment group in the immunogenicity set, delete cases to recover
@@ -446,7 +446,7 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
     # create a bootstrap sample
     bdata <- rbind(dataControls[bSampleControls[,i],], dataCases[bSampleCases[,i],])
     # extract the bootstrapped immunogenicity set
-    bdataI <- subset(bdata, !is.na(Sb))
+    bdataI <- subset(bdata, !is.na(S0) | !is.na(S1))
     
     bdataControls <- subset(bdata, Y==0)
     nPControlsI <- NROW(bdataPControlsI <- subset(bdataI, Z==0 & Y==0))
@@ -535,6 +535,10 @@ getPestVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   return(pVEcurve(data=data, s1grid=s1grid))
 }
 
+# 'getCoverVE' generates a data-set representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
+# bootstrap iterations, and returns a vector of 0s and 1s indicating whether the truth is covered by
+# the bootstrap Wald-type CI;
+# the last value of the output vector pertains to the simultaneous CI
 getCoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
   return(coverVEcurve(data=data, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
