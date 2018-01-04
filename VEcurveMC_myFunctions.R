@@ -369,7 +369,7 @@ pVEcurve <- function(data, s1grid){
   # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
   # sampling weights are incorporated
   dataB <- subset(dataI, Z==1 & !is.na(Sb))
-  fLM <- lm(S1 ~ ns(Sb), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
   
   # normal density estimator for g(s0) using the placebo group in the immunogenicity set
   dataB <- subset(dataI, Z==0)
@@ -522,6 +522,115 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   return(cover)
 }
 
+# 'pCoverVEcurve' returns a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by pointwise Wald-type bootstrap CIs;
+# the last value in the vector indicates coverage of the whole VE(s1) curve by the simultaneous Wald-type bootstrap CI
+# 'data' is a data frame with variables Z, Sb, S0, S1, and Y
+# 'nBoot' is the number of bootstrap iterations
+# parametric Gaussian density estimation is employed
+pCoverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
+  # extract the immunogenicity set
+  dataI <- subset(data, !is.na(S0) | !is.na(S1))
+  
+  # calculate the sampling weights
+  dataControls <- subset(data, Y==0)
+  nPControls <- NROW(subset(dataControls, Z==0))
+  wtPControls <- NROW(subset(dataControls, Z==0))/NROW(subset(dataI, Z==0 & Y==0))
+  wtVControls <- NROW(subset(dataControls, Z==1))/NROW(subset(dataI, Z==1 & Y==0))
+  
+  dataCases <- subset(data, Y==1)
+  nPCases <- NROW(subset(dataCases, Z==0))
+  wtPCases <- NROW(subset(dataCases, Z==0))/NROW(subset(dataI, Z==0 & Y==1))
+  wtVCases <- NROW(subset(dataCases, Z==1))/NROW(subset(dataI, Z==1 & Y==1))
+  group <- rep(1, NROW(subset(dataI, Z==0)))
+  
+  # the overall numbers of controls and cases for resampling
+  nControls <- NROW(dataControls)
+  nCases <- NROW(dataCases)
+  
+  # weighted logistic regression model using the placebo group in the immunogenicity set
+  fit1 <- tps(Y ~ S0, data=subset(dataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+  
+  # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+  # sampling weights are incorporated
+  dataB <- subset(dataI, Z==1 & !is.na(Sb))
+  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  
+  # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+  dataB <- subset(dataI, Z==0)
+  gLM <- lm(S0 ~ 1, data=dataB, weights=ifelse(dataB$Y==1, wtPCases, wtPControls))
+  
+  VEcurvePointEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, data, dataI, fit1, fLM, gLM) })
+  
+  bSampleControls <- matrix(sample(1:nControls, nControls*nBoot, replace=TRUE), nrow=nControls, ncol=nBoot)
+  bSampleCases <- matrix(sample(1:nCases, nCases*nBoot, replace=TRUE), nrow=nCases, ncol=nBoot)
+  
+  # 'bVEcurves' is a matrix with 'nBoot' columns each of which is a vector of bootstrap estimates of the VE curve on 's1grid'
+  bVEcurves <- sapply(1:nBoot, function(i){
+    # create a bootstrap sample
+    bdata <- rbind(dataControls[bSampleControls[,i],], dataCases[bSampleCases[,i],])
+    # extract the immunogenicity set
+    bdataI <- subset(bdata, !is.na(S0) | !is.na(S1))
+    
+    # calculate the sampling weights
+    bdataControls <- subset(bdata, Y==0)
+    nPControls <- NROW(subset(bdataControls, Z==0))
+    wtPControls <- NROW(subset(bdataControls, Z==0))/NROW(subset(bdataI, Z==0 & Y==0))
+    wtVControls <- NROW(subset(bdataControls, Z==1))/NROW(subset(bdataI, Z==1 & Y==0))
+    
+    bdataCases <- subset(bdata, Y==1)
+    nPCases <- NROW(subset(bdataCases, Z==0))
+    wtPCases <- NROW(subset(bdataCases, Z==0))/NROW(subset(bdataI, Z==0 & Y==1))
+    wtVCases <- NROW(subset(bdataCases, Z==1))/NROW(subset(bdataI, Z==1 & Y==1))
+    group <- rep(1, NROW(subset(bdataI, Z==0)))
+    
+    # weighted logistic regression model using the placebo group in the immunogenicity set
+    fit1 <- tps(Y ~ S0, data=subset(bdataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+    
+    # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+    # sampling weights are incorporated
+    bdataB <- subset(bdataI, Z==1 & !is.na(Sb))
+    fLM <- lm(S1 ~ ns(Sb, df=3), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
+    
+    # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+    bdataB <- subset(bdataI, Z==0)
+    gLM <- lm(S0 ~ 1, data=bdataB, weights=ifelse(bdataB$Y==1, wtPCases, wtPControls))
+    
+    VEcurveBootEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, bdata, bdataI, fit1, fLM, gLM) })
+    return(VEcurveBootEst)
+  })
+  
+  logRR <- log(1-VEcurvePointEst)
+  bLogRRs <- log(1-bVEcurves)
+  
+  # bootstrap SE of log RR estimates
+  bSE <- apply(bLogRRs, 1, sd, na.rm=TRUE)
+  
+  # pointwise confidence bounds for VE(s1)
+  LB.VE <- 1 - exp(logRR + qnorm(0.975) * bSE)
+  UB.VE <- 1 - exp(logRR - qnorm(0.975) * bSE)
+  
+  # indicator of the truth on 's1grid' being covered by pointwise CIs
+  cover <- as.numeric(LB.VE<trueVEcurve & UB.VE>trueVEcurve)
+  
+  supAbsZ <- NULL
+  for (j in 1:NCOL(bLogRRs)){
+    Zstat <- abs((bLogRRs[,j]-logRR)/bSE)
+    supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat))))
+  }
+  qSupAbsZ <- quantile(supAbsZ, probs=0.95, na.rm=TRUE)
+  
+  LB.VE <- 1 - exp(logRR + qSupAbsZ * bSE)
+  UB.VE <- 1 - exp(logRR - qSupAbsZ * bSE)
+  
+  # indicator of the truth on 's1grid' being covered by the simultaneous CI
+  smCover <- as.numeric(all(LB.VE<trueVEcurve) && all(UB.VE>trueVEcurve))
+  
+  # the last value of 'cover' pertains to the simultaneous coverage
+  cover <- c(cover, smCover)
+  
+  return(cover)
+}
+
 # 'getEstVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
 getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
@@ -542,4 +651,14 @@ getPestVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
 getCoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
   return(coverVEcurve(data=data, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+}
+
+# 'getPcoverVE' generates a data-set representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
+# bootstrap iterations, and returns a vector of 0s and 1s indicating whether the truth is covered by
+# the bootstrap Wald-type CI;
+# the last value of the output vector pertains to the simultaneous CI;
+# parametric Gaussian density estimation is employed
+getPcoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  return(pCoverVEcurve(data=data, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
