@@ -369,7 +369,7 @@ pVEcurve <- function(data, s1grid){
   # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
   # sampling weights are incorporated
   dataB <- subset(dataI, Z==1 & !is.na(Sb))
-  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  fLM <- lm(S1 ~ ns(Sb, df=2), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
   
   # normal density estimator for g(s0) using the placebo group in the immunogenicity set
   dataB <- subset(dataI, Z==0)
@@ -553,7 +553,7 @@ pCoverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
   # sampling weights are incorporated
   dataB <- subset(dataI, Z==1 & !is.na(Sb))
-  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  fLM <- lm(S1 ~ ns(Sb, df=2), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
   
   # normal density estimator for g(s0) using the placebo group in the immunogenicity set
   dataB <- subset(dataI, Z==0)
@@ -589,7 +589,7 @@ pCoverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
     # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
     # sampling weights are incorporated
     bdataB <- subset(bdataI, Z==1 & !is.na(Sb))
-    fLM <- lm(S1 ~ ns(Sb, df=3), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
+    fLM <- lm(S1 ~ ns(Sb, df=2), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
     
     # normal density estimator for g(s0) using the placebo group in the immunogenicity set
     bdataB <- subset(bdataI, Z==0)
