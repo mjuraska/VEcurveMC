@@ -50,6 +50,17 @@ getBeta1 <- function(beta0, beta2, beta3, meanS1, varS1, prob, scenario="A1", th
   return(uniroot(f, c(-10,10), beta0=beta0, beta2=beta2, beta3=beta3, meanS1=meanS1, varS1=varS1, prob=prob)$root)
 }
 
+# calculate the values of the probit risk model coefficients
+getBeta <- function(beta2, beta3=NULL, meanS0, varS0, meanS1, varS1, probP, probV, rr, rr0, scenario, threshold){
+  beta0 <- getBeta0(beta2, meanS0=meanS0, varS0=varS0, prob=probP, scenario=scenario, threshold=threshold)
+  beta1start <- startBeta1(beta0, rr0)
+  if (is.null(beta3)){
+    beta3 <- getBeta3(beta0, beta1start, beta2, meanS1=meanS1, varS1=varS1, rr)  
+  }
+  beta1 <- getBeta1(beta0, beta2, beta3, meanS1=meanS1, varS1=varS1, probV, scenario=scenario, threshold=threshold)
+  return(c(beta0, beta1, beta2, beta3))
+}
+
 # 'dmvnorm.s1vector' calculates f(s0,s1) where f is bivariate normal density
 # 's0' is a scalar
 # 's1' is a numeric vector
@@ -381,11 +392,10 @@ pVEcurve <- function(data, s1grid){
   return(VEcurvePointEst)
 }
 
-# 'coverVEcurve' returns a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by pointwise Wald-type bootstrap CIs;
-# the last value in the vector indicates coverage of the whole VE(s1) curve by the simultaneous Wald-type bootstrap CI
+# 'VEcurve2' is a version of 'VEcurve' that, besides the estimated VE(s1) curve evaluated on the grid of the 's1grid' values, returns other
+# quantities needed for the bootstrap
 # 'data' is a data frame with variables Z, Sb, S0, S1, and Y
-# 'nBoot' is the number of bootstrap iterations
-coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
+VEcurve2 <- function(data, s1grid){
   # extract the immunogenicity set
   dataI <- subset(data, !is.na(S0) | !is.na(S1))
   
@@ -416,14 +426,12 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   dataVIcorrectRatio <- rbind(dataVControlsI, dataVCasesI[sample(1:nVCasesI, nVCasesInew),])
   rm(dataPControlsI); rm(dataPCasesI); rm(dataVControlsI); rm(dataVCasesI)
   
-  # the overall numbers of controls and cases for resampling
   nControls <- NROW(dataControls)
   nCases <- NROW(dataCases)
   
-  # estimate the optimal bandwidths for kernel density estimation and use these in each bootstrap run
-  # RUNS SLOWLY!
+  # estimate the optimal bandwidths
   fbw <- npcdensbw(S1 ~ Sb, data=dataVIcorrectRatio, cxkertype="epanechnikov", cykertype="epanechnikov")
-  gbw <- npudensbw(~ S0, data=dataPIcorrectRatio, ckertype="epanechnikov")  
+  gbw <- npudensbw(~ S0, data=dataPIcorrectRatio, ckertype="epanechnikov")
   
   group <- rep(1, NROW(subset(dataI, Z==0)))
   
@@ -437,6 +445,16 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   ghat <- npudens(gbw)
   
   VEcurvePointEst <- sapply(s1grid, function(s1val){ estVE(s1val, data, dataI, fit1, fhat, ghat) })
+  
+  return(list(VEcurvePointEst=VEcurvePointEst, fbw=fbw, gbw=gbw))
+}
+
+bVEcurve2 <- function(data, s1grid, nBoot, fbw, gbw){
+  dataControls <- subset(data, Y==0)
+  dataCases <- subset(data, Y==1)
+  
+  nControls <- NROW(dataControls)
+  nCases <- NROW(dataCases)
   
   bSampleControls <- matrix(sample(1:nControls, nControls*nBoot, replace=TRUE), nrow=nControls, ncol=nBoot)
   bSampleCases <- matrix(sample(1:nCases, nCases*nBoot, replace=TRUE), nrow=nCases, ncol=nBoot)
@@ -490,6 +508,12 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
     return(VEcurveBootEst)
   })
   
+  return(bVEcurves)
+}
+
+# 'coverVEcurve' returns indicators of coverage of the true VE(s1) curve by both pointwise and simultaneous CIs based on 1 MC iteration
+# assumes that all 3 input arguments are evaluated on the same grid of s1 values
+coverVEcurve <- function(VEcurvePointEst, bVEcurves, trueVEcurve){
   logRR <- log(1-VEcurvePointEst)
   bLogRRs <- log(1-bVEcurves)
   
@@ -501,7 +525,7 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   UB.VE <- 1 - exp(logRR - qnorm(0.975) * bSE)
   
   # indicator of the truth on 's1grid' being covered by pointwise CIs
-  cover <- as.numeric(LB.VE<trueVEcurve & UB.VE>trueVEcurve)
+  coverInd <- as.numeric(LB.VE<trueVEcurve & UB.VE>trueVEcurve)
   
   supAbsZ <- NULL
   for (j in 1:NCOL(bLogRRs)){
@@ -514,12 +538,167 @@ coverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
   UB.VE <- 1 - exp(logRR - qSupAbsZ * bSE)
   
   # indicator of the truth on 's1grid' being covered by the simultaneous CI
-  smCover <- as.numeric(all(LB.VE<trueVEcurve) && all(UB.VE>trueVEcurve))
+  smCoverInd <- as.numeric(all(LB.VE<trueVEcurve) && all(UB.VE>trueVEcurve))
   
-  # the last value of 'cover' pertains to the simultaneous coverage
-  cover <- c(cover, smCover)
+  return(list(coverInd=coverInd, smCoverInd=smCoverInd))
+}
+
+# returns a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0}
+testConstancy <- function(VEcurve, bVEcurves){
+  logRR <- log(1-VEcurve)
+  bLogRRs <- log(1-bVEcurves)
   
-  return(cover)
+  # bootstrap SE of log RR estimates
+  bSE <- apply(bLogRRs, 1, sd, na.rm=TRUE)
+  
+  # calculate the supremum statistic for each bootstrap sample
+  supAbsZ <- NULL
+  for (i in 1:NCOL(bLogRRs)){ 
+    Zstat <- abs((bLogRRs[,i]-logRR)/bSE)
+    supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat)))) 
+  }
+  
+  # 2-sided p-value
+  p <- uniroot(f, 0:1, logRR=logRR, bSE=bSE, supAbsZ=supAbsZ)$root
+  return(p)
+}
+
+f <- function(alpha, logRR, bSE, supAbsZ){
+  qSupAbsZ <- ifelse(alpha==1, 0, ifelse(alpha==0, Inf, quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)))
+  minUB <- min(logRR + qSupAbsZ * bSE, na.rm=TRUE)
+  maxLB <- max(logRR - qSupAbsZ * bSE, na.rm=TRUE)
+  return(minUB - maxLB)
+}
+
+# returns a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0}, 
+# where VE_x and VE_y represent two independent populations (e.g., two trials in different geographic regions);
+# the code assumes that all VE curves were estimated on a common grid of marker values
+testTrialEquality <- function(VEcurve1, VEcurve2, bVEcurves1, bVEcurves2, s1grid=NULL, markerInterval=NULL){
+  if (!is.null(markerInterval)){
+    if (!is.null(s1grid)){
+      VEcurve1 <- VEcurve1[s1grid>=markerInterval[1] & s1grid<=markerInterval[2]]
+      VEcurve2 <- VEcurve2[s1grid>=markerInterval[1] & s1grid<=markerInterval[2]]
+      bVEcurves1 <- bVEcurves1[s1grid>=markerInterval[1] & s1grid<=markerInterval[2],]
+      bVEcurves2 <- bVEcurves2[s1grid>=markerInterval[1] & s1grid<=markerInterval[2],]  
+    } else {
+      stop("The argument 's1grid' is missing.")
+    }
+  }
+  
+  # difference in the log relative risk estimates
+  dlogRR <- log(1-VEcurve1) - log(1-VEcurve2)
+  dbLogRR <- log(1-bVEcurves1) - log(1-bVEcurves2)
+  
+  # bootstrap SE of the difference in the log RR estimates calculated, due to independence, as the square root of the sum of the population-specific sample variances
+  bSE <- sqrt(apply(bVEcurves1, 1, var, na.rm=TRUE) + apply(bVEcurves2, 1, var, na.rm=TRUE))
+  
+  # calculate the supremum statistic for each bootstrap sample
+  supAbsZ <- NULL
+  for (i in 1:NCOL(dbLogRR)){ 
+    Z <- abs((dbLogRR[,i]-dlogRR)/bSE)
+    supAbsZ <- c(supAbsZ, max(Z, na.rm=!all(is.na(Z)))) 
+  }
+  
+  # one of these two equations may not have a solution but at least one of them will always have a solution
+  alpha1 <- try(uniroot(fInf, 0:1, dlogRR=dlogRR, bSE=bSE, supAbsZ=supAbsZ)$root, silent=TRUE)
+  alpha2 <- try(uniroot(fSup, 0:1, dlogRR=dlogRR, bSE=bSE, supAbsZ=supAbsZ)$root, silent=TRUE)
+  
+  if (inherits(alpha1, 'try-error')){
+    # then 'alpha1' does not exist
+    alpha1 <- NA
+  } else {
+    # now we can plug 'alpha1' into 'fSup'
+    alpha1 <- ifelse(fSup(alpha1, dlogRR, bSE, supAbsZ)<=0, alpha1, NA)  
+  }
+  
+  if (inherits(alpha2, 'try-error')){
+    # then 'alpha2' does not exist
+    alpha2 <- NA
+  } else {
+    # now we can plug 'alpha2' into 'fInf'
+    alpha2 <- ifelse(fInf(alpha2, dlogRR, bSE, supAbsZ)>=0, alpha2, NA)
+  }
+  
+  # 2-sided p-value
+  return(min(alpha1, alpha2, na.rm=TRUE))
+}
+
+fInf <- function(alpha, dlogRR, bSE, supAbsZ){
+  qSupAbsZ <- ifelse(alpha==1, 0, ifelse(alpha==0, Inf, quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)))
+  return(min(dlogRR + qSupAbsZ * bSE, na.rm=TRUE))
+}
+
+fSup <- function(alpha, dlogRR, bSE, supAbsZ){
+  qSupAbsZ <- ifelse(alpha==1, 0, ifelse(alpha==0, Inf, quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)))
+  return(max(dlogRR - qSupAbsZ * bSE, na.rm=TRUE))
+}
+
+# 'inferenceVEcurve' returns a list with the following components:
+# coverInd                - a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by the pointwise bootstrap Wald-type CI
+# smCoverInd              - a 0 or 1 indicating coverage of the entire VE(s1) curve on the 's1grid' by the simultaneous bootstrap Wald-type CI
+# pSizeTestConstancy      - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestConstancy     - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in the same scenario as that used for coverage
+# pSizeTestTrialEquality  - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestTrialEquality - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H1
+inferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
+  VEcurveEst <- VEcurve2(data, s1grid)
+  
+  bVEcurves <- bVEcurve2(data, s1grid, nBoot, VEcurveEst$fbw, VEcurveEst$gbw)
+  
+  # a list with 'coverInd' and 'smCoverInd'
+  cover <- coverVEcurve(VEcurveEst$VEcurvePointEst, bVEcurves, trueVEcurve)
+  
+  # compute the p-value from the test of constancy under H0
+  VEcurveEstSizeT1 <- VEcurve2(dataSizeT1, s1grid)
+  bVEcurvesSizeT1 <- bVEcurve2(dataSizeT1, s1grid, nBoot, VEcurveEstSizeT1$fbw, VEcurveEstSizeT1$gbw)
+  pSizeTestConstancy <- testConstancy(VEcurveEstSizeT1$VEcurvePointEst, bVEcurvesSizeT1)
+  
+  # compute the p-value from the test of constancy under H1
+  pPowerTestConstancy <- testConstancy(VEcurveEst$VEcurvePointEst, bVEcurves)
+  
+  # compute the p-value from the test of equality in two populations under H0
+  VEcurveEstSizeT3 <- VEcurve2(dataSizeT3, s1grid)
+  bVEcurvesSizeT3 <- bVEcurve2(dataSizeT3, s1grid, nBoot, VEcurveEstSizeT3$fbw, VEcurveEstSizeT3$gbw)
+  pSizeTestTrialEquality <- testTrialEquality(VEcurveEst$VEcurvePointEst, VEcurveEstSizeT3$VEcurvePointEst, bVEcurves, bVEcurvesSizeT3)
+  
+  # compute the p-value from the test of equality in two populations under H1
+  VEcurveEstPowerT3 <- VEcurve2(dataPowerT3, s1grid)
+  bVEcurvesPowerT3 <- bVEcurve2(dataPowerT3, s1grid, nBoot, VEcurveEstPowerT3$fbw, VEcurveEstPowerT3$gbw)
+  pPowerTestTrialEquality <- testTrialEquality(VEcurveEst$VEcurvePointEst, VEcurveEstPowerT3$VEcurvePointEst, bVEcurves, bVEcurvesPowerT3)
+  
+  return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, pSizeTestConstancy=pSizeTestConstancy, pPowerTestConstancy=pPowerTestConstancy,
+              pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality))
+}
+
+# parametric Gaussian density estimation is employed
+pInferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
+  VEcurveEst <- pVEcurve2(data, s1grid)
+  
+  bVEcurves <- pbVEcurve2(data, s1grid, nBoot)
+  
+  # a list with 'coverInd' and 'smCoverInd'
+  cover <- coverVEcurve(VEcurveEst, bVEcurves, trueVEcurve)
+  
+  # compute the p-value from the test of constancy under H0
+  VEcurveEstSizeT1 <- pVEcurve2(dataSizeT1, s1grid)
+  bVEcurvesSizeT1 <- pbVEcurve2(dataSizeT1, s1grid, nBoot)
+  pSizeTestConstancy <- testConstancy(VEcurveEstSizeT1, bVEcurvesSizeT1)
+  
+  # compute the p-value from the test of constancy under H1
+  pPowerTestConstancy <- testConstancy(VEcurveEst, bVEcurves)
+  
+  # compute the p-value from the test of equality in two populations under H0
+  VEcurveEstSizeT3 <- pVEcurve2(dataSizeT3, s1grid)
+  bVEcurvesSizeT3 <- pbVEcurve2(dataSizeT3, s1grid, nBoot)
+  pSizeTestTrialEquality <- testTrialEquality(VEcurveEst, VEcurveEstSizeT3, bVEcurves, bVEcurvesSizeT3)
+  
+  # compute the p-value from the test of equality in two populations under H1
+  VEcurveEstPowerT3 <- pVEcurve2(dataPowerT3, s1grid)
+  bVEcurvesPowerT3 <- pbVEcurve2(dataPowerT3, s1grid, nBoot)
+  pPowerTestTrialEquality <- testTrialEquality(VEcurveEst, VEcurveEstPowerT3, bVEcurves, bVEcurvesPowerT3)
+  
+  return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, pSizeTestConstancy=pSizeTestConstancy, pPowerTestConstancy=pPowerTestConstancy,
+              pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality))
 }
 
 # 'pCoverVEcurve' returns a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by pointwise Wald-type bootstrap CIs;
@@ -644,21 +823,27 @@ getPestVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   return(pVEcurve(data=data, s1grid=s1grid))
 }
 
-# 'getCoverVE' generates a data-set representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
-# bootstrap iterations, and returns a vector of 0s and 1s indicating whether the truth is covered by
-# the bootstrap Wald-type CI;
-# the last value of the output vector pertains to the simultaneous CI
-getCoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
+# 'getInferenceVE' generates data representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
+# bootstrap iterations, and returns a list with the following components:
+# coverInd                - a vector of 0s and 1s indicating whether the truth is covered by the bootstrap Wald-type CI
+# smCoverInd              - a 0 or 1 indicating coverage of the entire VE(s1) curve on the 's1grid' by the simultaneous bootstrap Wald-type CI
+# pSizeTestConstancy      - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestConstancy     - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in the same scenario as that used for coverage
+# pSizeTestTrialEquality  - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestTrialEquality - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H1
+getInferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
-  return(coverVEcurve(data=data, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+  dataSizeT1 <- getData(n=n, beta=betaSizeT1, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  return(inferenceVEcurve(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
 
-# 'getPcoverVE' generates a data-set representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
-# bootstrap iterations, and returns a vector of 0s and 1s indicating whether the truth is covered by
-# the bootstrap Wald-type CI;
-# the last value of the output vector pertains to the simultaneous CI;
 # parametric Gaussian density estimation is employed
-getPcoverVE <- function(s1grid, trueVEcurve, n, beta, pi, truncateMarker, seed, nBoot){
+getPinferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
-  return(pCoverVEcurve(data=data, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+  dataSizeT1 <- getData(n=n, beta=betaSizeT1, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  return(pInferenceVEcurve(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
