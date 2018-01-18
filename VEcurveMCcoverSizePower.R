@@ -2,9 +2,11 @@
 
 rm(list=ls(all=TRUE))
 
-source("h:/SCHARP/Sanofi/manuscript_VEcurveMethod/code/VEcurveMC_myFunctions.R")
+# Ted, please specify the path for VEcurveMC_myFunctions.R in your local repo
+source("VEcurveMC_myFunctions.R")
 
-outDir <- "h:/SCHARP/Sanofi/manuscript_VEcurveMethod/Routput"
+# the output files are large, therefore I prefer that we store them in this shared folder rather than push them to the remote GitHub repo
+outDir <- "t:/vaccine/sanofipasteur/dengue/manuscript_VEcurveMethod/Routput"
 
 # the total sample size
 n <- 5000
@@ -13,14 +15,13 @@ n <- 5000
 truncateMarker <- TRUE
 
 # the number of MC iterations
-nMC <- 2
+nMC <- 10000
 
 # the number of bootstrap iterations within each MC iteration
-nBoot <- 5
+nBoot <- 500
 
 # a sampling probability for sampling a Phase 2 subcohort with biomarker measurements
-#pi <- c(0.1, 0.25, 0.5)
-pi <- 0.1
+pi <- c(0.1, 0.25, 0.5)
 
 # the grid of marker values
 s1 <- seq(1.5, qnorm(0.95, mean=3, sd=1), by=0.05)
