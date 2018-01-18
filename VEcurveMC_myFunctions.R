@@ -511,6 +511,55 @@ bVEcurve2 <- function(data, s1grid, nBoot, fbw, gbw){
   return(bVEcurves)
 }
 
+pbVEcurve <- function(data, s1grid, nBoot){
+  dataControls <- subset(data, Y==0)
+  dataCases <- subset(data, Y==1)
+  
+  nControls <- NROW(dataControls)
+  nCases <- NROW(dataCases)
+  
+  bSampleControls <- matrix(sample(1:nControls, nControls*nBoot, replace=TRUE), nrow=nControls, ncol=nBoot)
+  bSampleCases <- matrix(sample(1:nCases, nCases*nBoot, replace=TRUE), nrow=nCases, ncol=nBoot)
+  
+  # 'bVEcurves' is a matrix with 'nBoot' columns each of which is a vector of bootstrap estimates of the VE curve on 's1grid'
+  bVEcurves <- sapply(1:nBoot, function(i){
+    # create a bootstrap sample
+    bdata <- rbind(dataControls[bSampleControls[,i],], dataCases[bSampleCases[,i],])
+    # extract the bootstrapped immunogenicity set
+    bdataI <- subset(bdata, !is.na(S0) | !is.na(S1))
+    
+    # calculate the sampling weights
+    bdataControls <- subset(bdata, Y==0)
+    nPControls <- NROW(subset(bdataControls, Z==0))
+    wtPControls <- NROW(subset(bdataControls, Z==0))/NROW(subset(bdataI, Z==0 & Y==0))
+    wtVControls <- NROW(subset(bdataControls, Z==1))/NROW(subset(bdataI, Z==1 & Y==0))
+    
+    bdataCases <- subset(bdata, Y==1)
+    nPCases <- NROW(subset(bdataCases, Z==0))
+    wtPCases <- NROW(subset(bdataCases, Z==0))/NROW(subset(bdataI, Z==0 & Y==1))
+    wtVCases <- NROW(subset(bdataCases, Z==1))/NROW(subset(bdataI, Z==1 & Y==1))
+    group <- rep(1, NROW(subset(bdataI, Z==0)))
+    
+    # weighted logistic regression model using the placebo group in the immunogenicity set
+    fit1 <- tps(Y ~ S0, data=subset(bdataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+    
+    # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+    # sampling weights are incorporated
+    bdataB <- subset(bdataI, Z==1 & !is.na(Sb))
+    fLM <- lm(S1 ~ ns(Sb, df=3), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
+    
+    # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+    bdataB <- subset(bdataI, Z==0)
+    gLM <- lm(S0 ~ 1, data=bdataB, weights=ifelse(bdataB$Y==1, wtPCases, wtPControls))
+    
+    VEcurveBootEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, bdata, bdataI, fit1, fLM, gLM) })
+    return(VEcurveBootEst)
+  })
+  
+  return(bVEcurves)
+}
+
+
 # 'coverVEcurve' returns indicators of coverage of the true VE(s1) curve by both pointwise and simultaneous CIs based on 1 MC iteration
 # assumes that all 3 input arguments are evaluated on the same grid of s1 values
 coverVEcurve <- function(VEcurvePointEst, bVEcurves, trueVEcurve){
@@ -672,142 +721,33 @@ inferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, 
 
 # parametric Gaussian density estimation is employed
 pInferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
-  VEcurveEst <- pVEcurve2(data, s1grid)
+  VEcurveEst <- pVEcurve(data, s1grid)
   
-  bVEcurves <- pbVEcurve2(data, s1grid, nBoot)
+  bVEcurves <- pbVEcurve(data, s1grid, nBoot)
   
   # a list with 'coverInd' and 'smCoverInd'
   cover <- coverVEcurve(VEcurveEst, bVEcurves, trueVEcurve)
   
   # compute the p-value from the test of constancy under H0
-  VEcurveEstSizeT1 <- pVEcurve2(dataSizeT1, s1grid)
-  bVEcurvesSizeT1 <- pbVEcurve2(dataSizeT1, s1grid, nBoot)
+  VEcurveEstSizeT1 <- pVEcurve(dataSizeT1, s1grid)
+  bVEcurvesSizeT1 <- pbVEcurve(dataSizeT1, s1grid, nBoot)
   pSizeTestConstancy <- testConstancy(VEcurveEstSizeT1, bVEcurvesSizeT1)
   
   # compute the p-value from the test of constancy under H1
   pPowerTestConstancy <- testConstancy(VEcurveEst, bVEcurves)
   
   # compute the p-value from the test of equality in two populations under H0
-  VEcurveEstSizeT3 <- pVEcurve2(dataSizeT3, s1grid)
-  bVEcurvesSizeT3 <- pbVEcurve2(dataSizeT3, s1grid, nBoot)
+  VEcurveEstSizeT3 <- pVEcurve(dataSizeT3, s1grid)
+  bVEcurvesSizeT3 <- pbVEcurve(dataSizeT3, s1grid, nBoot)
   pSizeTestTrialEquality <- testTrialEquality(VEcurveEst, VEcurveEstSizeT3, bVEcurves, bVEcurvesSizeT3)
   
   # compute the p-value from the test of equality in two populations under H1
-  VEcurveEstPowerT3 <- pVEcurve2(dataPowerT3, s1grid)
-  bVEcurvesPowerT3 <- pbVEcurve2(dataPowerT3, s1grid, nBoot)
+  VEcurveEstPowerT3 <- pVEcurve(dataPowerT3, s1grid)
+  bVEcurvesPowerT3 <- pbVEcurve(dataPowerT3, s1grid, nBoot)
   pPowerTestTrialEquality <- testTrialEquality(VEcurveEst, VEcurveEstPowerT3, bVEcurves, bVEcurvesPowerT3)
   
   return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, pSizeTestConstancy=pSizeTestConstancy, pPowerTestConstancy=pPowerTestConstancy,
               pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality))
-}
-
-# 'pCoverVEcurve' returns a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by pointwise Wald-type bootstrap CIs;
-# the last value in the vector indicates coverage of the whole VE(s1) curve by the simultaneous Wald-type bootstrap CI
-# 'data' is a data frame with variables Z, Sb, S0, S1, and Y
-# 'nBoot' is the number of bootstrap iterations
-# parametric Gaussian density estimation is employed
-pCoverVEcurve <- function(data, s1grid, trueVEcurve, nBoot){
-  # extract the immunogenicity set
-  dataI <- subset(data, !is.na(S0) | !is.na(S1))
-  
-  # calculate the sampling weights
-  dataControls <- subset(data, Y==0)
-  nPControls <- NROW(subset(dataControls, Z==0))
-  wtPControls <- NROW(subset(dataControls, Z==0))/NROW(subset(dataI, Z==0 & Y==0))
-  wtVControls <- NROW(subset(dataControls, Z==1))/NROW(subset(dataI, Z==1 & Y==0))
-  
-  dataCases <- subset(data, Y==1)
-  nPCases <- NROW(subset(dataCases, Z==0))
-  wtPCases <- NROW(subset(dataCases, Z==0))/NROW(subset(dataI, Z==0 & Y==1))
-  wtVCases <- NROW(subset(dataCases, Z==1))/NROW(subset(dataI, Z==1 & Y==1))
-  group <- rep(1, NROW(subset(dataI, Z==0)))
-  
-  # the overall numbers of controls and cases for resampling
-  nControls <- NROW(dataControls)
-  nCases <- NROW(dataCases)
-  
-  # weighted logistic regression model using the placebo group in the immunogenicity set
-  fit1 <- tps(Y ~ S0, data=subset(dataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
-  
-  # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
-  # sampling weights are incorporated
-  dataB <- subset(dataI, Z==1 & !is.na(Sb))
-  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
-  
-  # normal density estimator for g(s0) using the placebo group in the immunogenicity set
-  dataB <- subset(dataI, Z==0)
-  gLM <- lm(S0 ~ 1, data=dataB, weights=ifelse(dataB$Y==1, wtPCases, wtPControls))
-  
-  VEcurvePointEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, data, dataI, fit1, fLM, gLM) })
-  
-  bSampleControls <- matrix(sample(1:nControls, nControls*nBoot, replace=TRUE), nrow=nControls, ncol=nBoot)
-  bSampleCases <- matrix(sample(1:nCases, nCases*nBoot, replace=TRUE), nrow=nCases, ncol=nBoot)
-  
-  # 'bVEcurves' is a matrix with 'nBoot' columns each of which is a vector of bootstrap estimates of the VE curve on 's1grid'
-  bVEcurves <- sapply(1:nBoot, function(i){
-    # create a bootstrap sample
-    bdata <- rbind(dataControls[bSampleControls[,i],], dataCases[bSampleCases[,i],])
-    # extract the immunogenicity set
-    bdataI <- subset(bdata, !is.na(S0) | !is.na(S1))
-    
-    # calculate the sampling weights
-    bdataControls <- subset(bdata, Y==0)
-    nPControls <- NROW(subset(bdataControls, Z==0))
-    wtPControls <- NROW(subset(bdataControls, Z==0))/NROW(subset(bdataI, Z==0 & Y==0))
-    wtVControls <- NROW(subset(bdataControls, Z==1))/NROW(subset(bdataI, Z==1 & Y==0))
-    
-    bdataCases <- subset(bdata, Y==1)
-    nPCases <- NROW(subset(bdataCases, Z==0))
-    wtPCases <- NROW(subset(bdataCases, Z==0))/NROW(subset(bdataI, Z==0 & Y==1))
-    wtVCases <- NROW(subset(bdataCases, Z==1))/NROW(subset(bdataI, Z==1 & Y==1))
-    group <- rep(1, NROW(subset(bdataI, Z==0)))
-    
-    # weighted logistic regression model using the placebo group in the immunogenicity set
-    fit1 <- tps(Y ~ S0, data=subset(bdataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
-    
-    # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
-    # sampling weights are incorporated
-    bdataB <- subset(bdataI, Z==1 & !is.na(Sb))
-    fLM <- lm(S1 ~ ns(Sb, df=3), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
-    
-    # normal density estimator for g(s0) using the placebo group in the immunogenicity set
-    bdataB <- subset(bdataI, Z==0)
-    gLM <- lm(S0 ~ 1, data=bdataB, weights=ifelse(bdataB$Y==1, wtPCases, wtPControls))
-    
-    VEcurveBootEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, bdata, bdataI, fit1, fLM, gLM) })
-    return(VEcurveBootEst)
-  })
-  
-  logRR <- log(1-VEcurvePointEst)
-  bLogRRs <- log(1-bVEcurves)
-  
-  # bootstrap SE of log RR estimates
-  bSE <- apply(bLogRRs, 1, sd, na.rm=TRUE)
-  
-  # pointwise confidence bounds for VE(s1)
-  LB.VE <- 1 - exp(logRR + qnorm(0.975) * bSE)
-  UB.VE <- 1 - exp(logRR - qnorm(0.975) * bSE)
-  
-  # indicator of the truth on 's1grid' being covered by pointwise CIs
-  cover <- as.numeric(LB.VE<trueVEcurve & UB.VE>trueVEcurve)
-  
-  supAbsZ <- NULL
-  for (j in 1:NCOL(bLogRRs)){
-    Zstat <- abs((bLogRRs[,j]-logRR)/bSE)
-    supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat))))
-  }
-  qSupAbsZ <- quantile(supAbsZ, probs=0.95, na.rm=TRUE)
-  
-  LB.VE <- 1 - exp(logRR + qSupAbsZ * bSE)
-  UB.VE <- 1 - exp(logRR - qSupAbsZ * bSE)
-  
-  # indicator of the truth on 's1grid' being covered by the simultaneous CI
-  smCover <- as.numeric(all(LB.VE<trueVEcurve) && all(UB.VE>trueVEcurve))
-  
-  # the last value of 'cover' pertains to the simultaneous coverage
-  cover <- c(cover, smCover)
-  
-  return(cover)
 }
 
 # 'getEstVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
@@ -839,6 +779,14 @@ getInferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3
   return(inferenceVEcurve(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
 
+# 'getPinferenceVE' generates data representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
+# bootstrap iterations, and returns a list with the following components:
+# coverInd                - a vector of 0s and 1s indicating whether the truth is covered by the bootstrap Wald-type CI
+# smCoverInd              - a 0 or 1 indicating coverage of the entire VE(s1) curve on the 's1grid' by the simultaneous bootstrap Wald-type CI
+# pSizeTestConstancy      - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestConstancy     - a 2-sided p-value of {H0: VE(s1)=VE for all s1} against {H1: non-H0} in the same scenario as that used for coverage
+# pSizeTestTrialEquality  - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H0
+# pPowerTestTrialEquality - a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0} in a scenario that satisfies H1;
 # parametric Gaussian density estimation is employed
 getPinferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
