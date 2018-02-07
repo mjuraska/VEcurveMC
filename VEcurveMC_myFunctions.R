@@ -619,6 +619,30 @@ f <- function(alpha, logRR, bSE, supAbsZ){
   return(minUB - maxLB)
 }
 
+# returns an indicator of rejecting {H0: VE(s1)=VE for all s1} in favor of {H1: non-H0}
+# 'overallVE' is the point estimate of 1 - P(Y=1|Z=1)/P(Y=1|Z=0)
+testConstancy2 <- function(VEcurve, bVEcurves, overallVE, alpha=0.05){
+  oLogRR <- log(1-overallVE)
+  logRR <- log(1-VEcurve)
+  bLogRRs <- log(1-bVEcurves)
+  
+  # bootstrap SE of log RR estimates
+  bSE <- apply(bLogRRs, 1, sd, na.rm=TRUE)
+  
+  # calculate the supremum statistic for each bootstrap sample
+  supAbsZ <- NULL
+  for (i in 1:NCOL(bLogRRs)){ 
+    Zstat <- abs((bLogRRs[,i]-logRR)/bSE)
+    supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat)))) 
+  }
+  # critical value
+  qSupAbsZ <- quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)
+  
+  testStat <- max(abs(logRR-oLogRR)/bSE, na.rm=TRUE)
+  
+  return(as.numeric(testStat > qSupAbsZ))
+}
+
 # returns a 2-sided p-value of {H0: VE_x(s1)=VE_y(s1) for all s1 in [s_l,s_u]} against {H1: non-H0}, 
 # where VE_x and VE_y represent two independent populations (e.g., two trials in different geographic regions);
 # the code assumes that all VE curves were estimated on a common grid of marker values
@@ -681,6 +705,40 @@ fSup <- function(alpha, dlogRR, bSE, supAbsZ){
   qSupAbsZ <- ifelse(alpha==1, 0, ifelse(alpha==0, Inf, quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)))
   return(max(dlogRR - qSupAbsZ * bSE, na.rm=TRUE))
 }
+
+testTrialEquality2 <- function(VEcurve1, VEcurve2, bVEcurves1, bVEcurves2, s1grid=NULL, markerInterval=NULL, alpha=0.05){
+  if (!is.null(markerInterval)){
+    if (!is.null(s1grid)){
+      VEcurve1 <- VEcurve1[s1grid>=markerInterval[1] & s1grid<=markerInterval[2]]
+      VEcurve2 <- VEcurve2[s1grid>=markerInterval[1] & s1grid<=markerInterval[2]]
+      bVEcurves1 <- bVEcurves1[s1grid>=markerInterval[1] & s1grid<=markerInterval[2],]
+      bVEcurves2 <- bVEcurves2[s1grid>=markerInterval[1] & s1grid<=markerInterval[2],]  
+    } else {
+      stop("The argument 's1grid' is missing.")
+    }
+  }
+  
+  # difference in the log relative risk estimates
+  dlogRR <- log(1-VEcurve1) - log(1-VEcurve2)
+  dbLogRR <- log(1-bVEcurves1) - log(1-bVEcurves2)
+  
+  # bootstrap SE of the difference in the log RR estimates calculated, due to independence, as the square root of the sum of the population-specific sample variances
+  bSE <- sqrt(apply(log(1-bVEcurves1), 1, var, na.rm=TRUE) + apply(log(1-bVEcurves2), 1, var, na.rm=TRUE))
+  
+  # calculate the supremum statistic for each bootstrap sample
+  supAbsZ <- NULL
+  for (i in 1:NCOL(dbLogRR)){ 
+    Z <- abs((dbLogRR[,i]-dlogRR)/bSE)
+    supAbsZ <- c(supAbsZ, max(Z, na.rm=!all(is.na(Z)))) 
+  }
+  # critical value
+  qSupAbsZ <- quantile(supAbsZ, probs=1-alpha, na.rm=TRUE)
+  
+  testStat <- max(abs(dlogRR)/bSE, na.rm=TRUE)
+  
+  return(as.numeric(testStat > qSupAbsZ))
+}
+
 
 # 'inferenceVEcurve' returns a list with the following components:
 # coverInd                - a vector of 0s and 1s indicating whether the true VE(s1) values on the 's1grid' are covered by the pointwise bootstrap Wald-type CI
@@ -750,6 +808,40 @@ pInferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid,
               pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality))
 }
 
+# parametric Gaussian density estimation is employed
+pInferenceVEcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
+  VEcurveEst <- pVEcurve(data, s1grid)
+  
+  bVEcurves <- pbVEcurve(data, s1grid, nBoot)
+  
+  # a list with 'coverInd' and 'smCoverInd'
+  cover <- coverVEcurve(VEcurveEst, bVEcurves, trueVEcurve)
+  
+  # compute the p-value from the test of constancy under H0
+  VEcurveEstSizeT1 <- pVEcurve(dataSizeT1, s1grid)
+  bVEcurvesSizeT1 <- pbVEcurve(dataSizeT1, s1grid, nBoot)
+  fit <- glm(Y ~ Z, data=data, family=binomial)
+  prob <- predict(fit, newdata=data.frame(Z=0:1), type="response")
+  overallVE <- 1 - prob[2]/prob[1]
+  rejectIndSizeTestConstancy <- testConstancy2(VEcurveEstSizeT1, bVEcurvesSizeT1, overallVE)
+  
+  # compute the p-value from the test of constancy under H1
+  rejectIndPowerTestConstancy <- testConstancy2(VEcurveEst, bVEcurves, overallVE)
+  
+  # compute the p-value from the test of equality in two populations under H0
+  VEcurveEstSizeT3 <- pVEcurve(dataSizeT3, s1grid)
+  bVEcurvesSizeT3 <- pbVEcurve(dataSizeT3, s1grid, nBoot)
+  rejectIndSizeTestTrialEquality <- testTrialEquality2(VEcurveEst, VEcurveEstSizeT3, bVEcurves, bVEcurvesSizeT3)
+  
+  # compute the p-value from the test of equality in two populations under H1
+  VEcurveEstPowerT3 <- pVEcurve(dataPowerT3, s1grid)
+  bVEcurvesPowerT3 <- pbVEcurve(dataPowerT3, s1grid, nBoot)
+  rejectIndPowerTestTrialEquality <- testTrialEquality2(VEcurveEst, VEcurveEstPowerT3, bVEcurves, bVEcurvesPowerT3)
+  
+  return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, rejectIndSizeTestConstancy=rejectIndSizeTestConstancy, rejectIndPowerTestConstancy=rejectIndPowerTestConstancy,
+              rejectIndSizeTestTrialEquality=rejectIndSizeTestTrialEquality, rejectIndPowerTestTrialEquality=rejectIndPowerTestTrialEquality))
+}
+
 # 'getEstVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
 getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
@@ -794,4 +886,12 @@ getPinferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT
   dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   return(pInferenceVEcurve(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+}
+
+getPinferenceVE2 <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT1 <- getData(n=n, beta=betaSizeT1, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  return(pInferenceVEcurve2(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
