@@ -639,7 +639,7 @@ testTrialEquality <- function(VEcurve1, VEcurve2, bVEcurves1, bVEcurves2, s1grid
   dbLogRR <- log(1-bVEcurves1) - log(1-bVEcurves2)
   
   # bootstrap SE of the difference in the log RR estimates calculated, due to independence, as the square root of the sum of the population-specific sample variances
-  bSE <- sqrt(apply(bVEcurves1, 1, var, na.rm=TRUE) + apply(bVEcurves2, 1, var, na.rm=TRUE))
+  bSE <- sqrt(apply(log(1-bVEcurves1), 1, var, na.rm=TRUE) + apply(log(1-bVEcurves2), 1, var, na.rm=TRUE))
   
   # calculate the supremum statistic for each bootstrap sample
   supAbsZ <- NULL
