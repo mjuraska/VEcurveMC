@@ -15,7 +15,7 @@ n <- 5000
 truncateMarker <- TRUE
 
 # the number of MC iterations
-nMC <- 10000
+nMC <- 1000
 
 # the number of bootstrap iterations within each MC iteration
 nBoot <- 500
@@ -45,14 +45,5 @@ for (i in 1:length(pi)){
     getPinferenceVE(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot) }, s1grid=s1, trueVEcurve=trueVEcurve, n=n, beta=beta, 
     betaSizeT1=betaSizeT1, betaPowerT3=betaPowerT3, pi=pi[i], truncateMarker=truncateMarker, nBoot=nBoot)
   
-  coverInd <- do.call(cbind, lapply(inferenceVE, "[[", "coverInd"))
-  smCoverInd <- do.call(c, lapply(inferenceVE, "[[", "smCoverInd"))
-  pSizeTestConstancy <- do.call(c, lapply(inferenceVE, "[[", "pSizeTestConstancy"))
-  pPowerTestConstancy <- do.call(c, lapply(inferenceVE, "[[", "pPowerTestConstancy"))
-  pSizeTestTrialEquality <- do.call(c, lapply(inferenceVE, "[[", "pSizeTestTrialEquality"))
-  pPowerTestTrialEquality <- do.call(c, lapply(inferenceVE, "[[", "pPowerTestTrialEquality"))
-  
-  out <- list(coverInd=coverInd, smCoverInd=smCoverInd, pSizeTestConstancy=pSizeTestConstancy, pPowerTestConstancy=pPowerTestConstancy, 
-              pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality)
-  save(out, file=file.path(outDir, paste0("pVE_coverSizePower_ns.df=3_nMC=",nMC,"_N=",n,"_nBoot=",nBoot,"_truncateMarker=",truncateMarker,"_pi=",pi[i],".RData")))
+  save(inferenceVE, file=file.path(outDir, paste0("pVE_coverSizePower_ns.df=3_nMC=",nMC,"_N=",n,"_nBoot=",nBoot,"_truncateMarker=",truncateMarker,"_pi=",pi[i],"_v2.RData")))
 }
