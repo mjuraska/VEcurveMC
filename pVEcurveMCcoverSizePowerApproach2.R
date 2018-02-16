@@ -45,5 +45,5 @@ for (i in 1:length(pi)){
     getPinferenceVE2(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot) }, s1grid=s1, trueVEcurve=trueVEcurve, n=n, beta=beta, 
     betaSizeT1=betaSizeT1, betaPowerT3=betaPowerT3, pi=pi[i], truncateMarker=truncateMarker, nBoot=nBoot)
   
-  save(inferenceVE, file=file.path(outDir, paste0("pVE_coverSizePowerApproach2_ns.df=3_nMC=",nMC,"_N=",n,"_nBoot=",nBoot,"_truncateMarker=",truncateMarker,"_pi=",pi[i],".RData")))
+  save(inferenceVE, file=file.path(outDir, paste0("pVE_coverSizePowerApproach3_ns.df=3_nMC=",nMC,"_N=",n,"_nBoot=",nBoot,"_truncateMarker=",truncateMarker,"_pi=",pi[i],".RData")))
 }

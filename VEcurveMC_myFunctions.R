@@ -822,7 +822,8 @@ pInferenceVEcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid
   bVEcurvesSizeT1 <- pbVEcurve(dataSizeT1, s1grid, nBoot)
   fit <- glm(Y ~ Z, data=data, family=binomial)
   prob <- predict(fit, newdata=data.frame(Z=0:1), type="response")
-  overallVE <- 1 - prob[2]/prob[1]
+  #overallVE <- 1 - prob[2]/prob[1]
+  overallVE <- 0.5
   rejectIndSizeTestConstancy <- testConstancy2(VEcurveEstSizeT1, bVEcurvesSizeT1, overallVE)
   
   # compute the p-value from the test of constancy under H1
