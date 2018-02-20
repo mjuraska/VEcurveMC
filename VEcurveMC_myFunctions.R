@@ -4,6 +4,14 @@ library(osDesign)
 library(np)
 library(splines)
 
+logit <- function(p){
+  return(log(p/(1-p)))
+}
+
+expit <- function(x){
+  return(exp(x)/(1+exp(x)))
+}
+
 # determine beta_0 to achieve a prespecified marginal probability of infection in the placebo group
 # 'scenario' is one of "A1" and "A2"
 getBeta0 <- function(beta2, meanS0, varS0, prob, scenario="A1", threshold=NULL){
@@ -145,6 +153,15 @@ risk0 <- function(s1, beta0, beta2, meanS0, varS0, meanS1, varS1, covS0S1, scena
 # 'scenario' is one of "A1" and "A2"
 trueVE <- function(s1, beta0, beta1, beta2, beta3, meanS0, varS0, meanS1, varS1, covS0S1, scenario="A1", threshold=NULL){
   1 - pnorm(beta0+beta1+beta3*s1)/sapply(s1, function(s1Value){ risk0(s1Value, beta0, beta2, meanS0, varS0, meanS1, varS1, covS0S1, scenario=scenario, threshold=threshold) }) 
+}
+
+# the true "risk curves" assuming the probit model for the probability of infection
+# 's1' is a vector
+# 'scenario' is one of "A1" and "A2"
+trueRisk <- function(s1, beta0, beta1, beta2, beta3, meanS0, varS0, meanS1, varS1, covS0S1, scenario="A1", threshold=NULL){
+  txRisk <- pnorm(beta0+beta1+beta3*s1)
+  plaRisk <- sapply(s1, function(s1Value){ risk0(s1Value, beta0, beta2, meanS0, varS0, meanS1, varS1, covS0S1, scenario=scenario, threshold=threshold) })
+  return(list(plaRisk=plaRisk, txRisk=txRisk))
 }
 
 # 'n' is the total sample size
@@ -301,6 +318,18 @@ pEstVE <- function(s1, data, dataI, tpsFit, lmFit1, lmFit2){
   return(VE)
 }
 
+# 'pEstRisk' is a version of 'pEstVE' and returns a numeric vector with the estimated P(Y(0)=1|S(1)=s1) and P(Y(1)=1|S(1)=s1) in this order
+# s1 is a scalar
+pEstRisk <- function(s1, data, dataI, tpsFit, lmFit1, lmFit2){
+  riskPvalue <- pRiskP(s1, data, tpsFit, lmFit1, lmFit2)
+  
+  if (is.null(riskPvalue)){ 
+    return(c(NA,NA))
+  } else {
+    return(c(riskPvalue, riskV(s1, data, dataI)))
+  }
+}
+
 # 'VEcurve' returns the estimated VE(s1) curve evaluated on the grid of the 's1grid' values
 # 'data' is a data frame with variables Z, Sb, S0, S1, and Y
 VEcurve <- function(data, s1grid){
@@ -390,6 +419,42 @@ pVEcurve <- function(data, s1grid){
   VEcurvePointEst <- sapply(s1grid, function(s1val){ pEstVE(s1val, data, dataI, fit1, fLM, gLM) })
   
   return(VEcurvePointEst)
+}
+
+# 'pRiskCurve' is a version of 'pVEcurve' outputting the "risk curve" on 's1grid' in each treatment arm instead of the VE curve
+# it allows evaluation of an arbitrary mCEP curve estimand, i.e., an arbitrary contrast function
+# 'data' is a data frame with variables Z, Sb, S0, S1, and Y
+# the output is a list with 2 components being the 2 risk curves
+pRiskCurve <- function(data, s1grid){
+  # extract the immunogenicity set
+  dataI <- subset(data, !is.na(S0) | !is.na(S1))
+  
+  # calculate the sampling weights
+  nPControls <- NROW(subset(data, Z==0 & Y==0))
+  wtPControls <- NROW(subset(data, Z==0 & Y==0))/NROW(subset(dataI, Z==0 & Y==0))
+  wtVControls <- NROW(subset(data, Z==1 & Y==0))/NROW(subset(dataI, Z==1 & Y==0))
+  
+  nPCases <- NROW(subset(data, Z==0 & Y==1))
+  wtPCases <- NROW(subset(data, Z==0 & Y==1))/NROW(subset(dataI, Z==0 & Y==1))
+  wtVCases <- NROW(subset(data, Z==1 & Y==1))/NROW(subset(dataI, Z==1 & Y==1))
+  group <- rep(1, NROW(subset(dataI, Z==0)))
+  
+  # weighted logistic regression model using the placebo group in the immunogenicity set
+  fit1 <- tps(Y ~ S0, data=subset(dataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+  
+  # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+  # sampling weights are incorporated
+  dataB <- subset(dataI, Z==1 & !is.na(Sb))
+  fLM <- lm(S1 ~ ns(Sb, df=3), data=dataB, weights=ifelse(dataB$Y==1, wtVCases, wtVControls))
+  
+  # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+  dataB <- subset(dataI, Z==0)
+  gLM <- lm(S0 ~ 1, data=dataB, weights=ifelse(dataB$Y==1, wtPCases, wtPControls))
+  
+  # a matrix with the rows being the "risk curves" on 's1grid' in the placebo and treatment arm
+  riskCurvePointEst <- sapply(s1grid, function(s1val){ pEstRisk(s1val, data, dataI, fit1, fLM, gLM) })
+  
+  return(list(plaRiskCurvePointEst=riskCurvePointEst[1,], txRiskCurvePointEst=riskCurvePointEst[2,]))
 }
 
 # 'VEcurve2' is a version of 'VEcurve' that, besides the estimated VE(s1) curve evaluated on the grid of the 's1grid' values, returns other
@@ -559,6 +624,55 @@ pbVEcurve <- function(data, s1grid, nBoot){
   return(bVEcurves)
 }
 
+# a version of 'pbVEcurve' outputting bootstrapped "risk curves"
+pbRiskCurves <- function(data, s1grid, nBoot){
+  dataControls <- subset(data, Y==0)
+  dataCases <- subset(data, Y==1)
+  
+  nControls <- NROW(dataControls)
+  nCases <- NROW(dataCases)
+  
+  bSampleControls <- matrix(sample(1:nControls, nControls*nBoot, replace=TRUE), nrow=nControls, ncol=nBoot)
+  bSampleCases <- matrix(sample(1:nCases, nCases*nBoot, replace=TRUE), nrow=nCases, ncol=nBoot)
+  
+  # 'bVEcurves' is a matrix with 'nBoot' columns each of which is a vector of bootstrap estimates of the VE curve on 's1grid'
+  bRiskCurves <- lapply(1:nBoot, function(i){
+    # create a bootstrap sample
+    bdata <- rbind(dataControls[bSampleControls[,i],], dataCases[bSampleCases[,i],])
+    # extract the bootstrapped immunogenicity set
+    bdataI <- subset(bdata, !is.na(S0) | !is.na(S1))
+    
+    # calculate the sampling weights
+    bdataControls <- subset(bdata, Y==0)
+    nPControls <- NROW(subset(bdataControls, Z==0))
+    wtPControls <- NROW(subset(bdataControls, Z==0))/NROW(subset(bdataI, Z==0 & Y==0))
+    wtVControls <- NROW(subset(bdataControls, Z==1))/NROW(subset(bdataI, Z==1 & Y==0))
+    
+    bdataCases <- subset(bdata, Y==1)
+    nPCases <- NROW(subset(bdataCases, Z==0))
+    wtPCases <- NROW(subset(bdataCases, Z==0))/NROW(subset(bdataI, Z==0 & Y==1))
+    wtVCases <- NROW(subset(bdataCases, Z==1))/NROW(subset(bdataI, Z==1 & Y==1))
+    group <- rep(1, NROW(subset(bdataI, Z==0)))
+    
+    # weighted logistic regression model using the placebo group in the immunogenicity set
+    fit1 <- tps(Y ~ S0, data=subset(bdataI, Z==0), nn0=nPControls, nn1=nPCases, group=group, method="PL", cohort=TRUE)
+    
+    # normal density estimator for f(s1|Sb=sb) using the vaccine group in the immunogenicity set with baseline markers
+    # sampling weights are incorporated
+    bdataB <- subset(bdataI, Z==1 & !is.na(Sb))
+    fLM <- lm(S1 ~ ns(Sb, df=3), data=bdataB, weights=ifelse(bdataB$Y==1, wtVCases, wtVControls))
+    
+    # normal density estimator for g(s0) using the placebo group in the immunogenicity set
+    bdataB <- subset(bdataI, Z==0)
+    gLM <- lm(S0 ~ 1, data=bdataB, weights=ifelse(bdataB$Y==1, wtPCases, wtPControls))
+    
+    riskCurvesBootEst <- sapply(s1grid, function(s1val){ pEstRisk(s1val, bdata, bdataI, fit1, fLM, gLM) })
+    return(list(plaRiskCurveBootEst=riskCurvesBootEst[1,], txRiskCurveBootEst=riskCurvesBootEst[2,]))
+  })
+  
+  return(bRiskCurves)
+}
+
 
 # 'coverVEcurve' returns indicators of coverage of the true VE(s1) curve by both pointwise and simultaneous CIs based on 1 MC iteration
 # assumes that all 3 input arguments are evaluated on the same grid of s1 values
@@ -588,6 +702,80 @@ coverVEcurve <- function(VEcurvePointEst, bVEcurves, trueVEcurve){
   
   # indicator of the truth on 's1grid' being covered by the simultaneous CI
   smCoverInd <- as.numeric(all(LB.VE<trueVEcurve) && all(UB.VE>trueVEcurve))
+  
+  return(list(coverInd=coverInd, smCoverInd=smCoverInd))
+}
+
+# 'coverMCEPcurve' returns indicators of coverage of the true MCEP(s1) curve by both pointwise and simultaneous CIs based on 1 MC iteration
+# assumes that all 3 input arguments are evaluated on the same grid of s1 values
+# 'normTransform' is one of "identity" and "logit"
+coverMCEPcurve <- function(riskCurvePointEst, bRiskCurves, trueRiskCurves, normTransform){
+  # true MCEP curve
+  trueMCEP <- trueRiskCurves$plaRisk - trueRiskCurves$txRisk
+  
+  # cbind all bootstrap estimates to make easier to transform
+  plaRiskCurveBootEst <- sapply(bRiskCurves, "[[", "plaRiskCurveBootEst")
+  txRiskCurveBootEst <- sapply(bRiskCurves, "[[", "txRiskCurveBootEst")
+  
+  if (normTransform=="identity"){
+    # transformed estimated MCEP curve
+    tMCEP <- riskCurvePointEst$plaRiskCurvePointEst - riskCurvePointEst$txRiskCurvePointEst
+    # transformed bootstrapped MCEP curves
+    tbMCEP <- plaRiskCurveBootEst - txRiskCurveBootEst
+    
+    # bootstrap SE of tMCEP estimates
+    bSE <- apply(tbMCEP, 1, sd, na.rm=TRUE)
+    
+    # pointwise confidence bounds for MCEP(s1)
+    LB.MCEP <- tMCEP - qnorm(0.975) * bSE
+    UB.MCEP <- tMCEP + qnorm(0.975) * bSE
+    
+    # indicator of the truth on 's1grid' being covered by pointwise CIs
+    coverInd <- as.numeric(LB.MCEP<trueMCEP & UB.MCEP>trueMCEP)
+    
+    supAbsZ <- NULL
+    for (j in 1:NCOL(tbMCEP)){
+      Zstat <- abs((tbMCEP[,j]-tMCEP)/bSE)
+      supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat))))
+    }
+    qSupAbsZ <- quantile(supAbsZ, probs=0.95, na.rm=TRUE)
+    
+    LB.MCEP <- tMCEP - qSupAbsZ * bSE
+    UB.MCEP <- tMCEP + qSupAbsZ * bSE
+    
+    # indicator of the truth on 's1grid' being covered by the simultaneous CI
+    smCoverInd <- as.numeric(all(LB.MCEP<trueMCEP) && all(UB.MCEP>trueMCEP))
+  }
+  
+  if (normTransform=="logit"){
+    # transformed MCEP curve
+    tMCEP <- logit(((riskCurvePointEst$plaRiskCurvePointEst - riskCurvePointEst$txRiskCurvePointEst) + 1)/2)
+    # transformed bootstrapped MCEP curves
+    tbMCEP <- logit(((plaRiskCurveBootEst - txRiskCurveBootEst) + 1)/2)
+    
+    # bootstrap SE of tMCEP estimates
+    bSE <- apply(tbMCEP, 1, sd, na.rm=TRUE)
+    
+    # pointwise confidence bounds for MCEP(s1)
+    LB.MCEP <- 2*expit(tMCEP - qnorm(0.975) * bSE) - 1
+    UB.MCEP <- 2*expit(tMCEP + qnorm(0.975) * bSE) - 1
+    
+    # indicator of the truth on 's1grid' being covered by pointwise CIs
+    coverInd <- as.numeric(LB.MCEP<trueMCEP & UB.MCEP>trueMCEP)
+    
+    supAbsZ <- NULL
+    for (j in 1:NCOL(tbMCEP)){
+      Zstat <- abs((tbMCEP[,j]-tMCEP)/bSE)
+      supAbsZ <- c(supAbsZ, max(Zstat, na.rm=!all(is.na(Zstat))))
+    }
+    qSupAbsZ <- quantile(supAbsZ, probs=0.95, na.rm=TRUE)
+    
+    LB.MCEP <- 2*expit(tMCEP - qSupAbsZ * bSE) - 1
+    UB.MCEP <- 2*expit(tMCEP + qSupAbsZ * bSE) - 1
+    
+    # indicator of the truth on 's1grid' being covered by the simultaneous CI
+    smCoverInd <- as.numeric(all(LB.MCEP<trueMCEP) && all(UB.MCEP>trueMCEP))
+  }
   
   return(list(coverInd=coverInd, smCoverInd=smCoverInd))
 }
@@ -843,6 +1031,46 @@ pInferenceVEcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid
               rejectIndSizeTestTrialEquality=rejectIndSizeTestTrialEquality, rejectIndPowerTestTrialEquality=rejectIndPowerTestTrialEquality))
 }
 
+# a version of 'pInferenceVEcurve2' for different contrasts (currently implemented for additive difference only)
+# two normalizing transformations are considered: identity and logit((x+1)/2)
+pInferenceMCEPcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueRiskCurves, nBoot, contrast="additive"){
+  # a list with components 'plaRiskCurvePointEst' and 'txRiskCurvePointEst'
+  riskCurveEst <- pRiskCurve(data, s1grid)
+  
+  # a list of length 'nBoot' each component of which is a list with components 'plaRiskCurveBootEst' and 'txRiskCurveBootEst'
+  bRiskCurves <- pbRiskCurves(data, s1grid, nBoot)
+  
+  # a list with 'coverInd' and 'smCoverInd'
+  coverIdTransform <- coverMCEPcurve(riskCurveEst, bRiskCurves, trueRiskCurves, normTransform="identity")
+  coverLogitTransform <- coverMCEPcurve(riskCurveEst, bRiskCurves, trueRiskCurves, normTransform="logit")
+  
+  # # compute the p-value from the test of constancy under H0
+  # VEcurveEstSizeT1 <- pVEcurve(dataSizeT1, s1grid)
+  # bVEcurvesSizeT1 <- pbVEcurve(dataSizeT1, s1grid, nBoot)
+  # fit <- glm(Y ~ Z, data=data, family=binomial)
+  # prob <- predict(fit, newdata=data.frame(Z=0:1), type="response")
+  # #overallVE <- 1 - prob[2]/prob[1]
+  # overallVE <- 0.5
+  # rejectIndSizeTestConstancy <- testConstancy2(VEcurveEstSizeT1, bVEcurvesSizeT1, overallVE)
+  # 
+  # # compute the p-value from the test of constancy under H1
+  # rejectIndPowerTestConstancy <- testConstancy2(VEcurveEst, bVEcurves, overallVE)
+  # 
+  # # compute the p-value from the test of equality in two populations under H0
+  # VEcurveEstSizeT3 <- pVEcurve(dataSizeT3, s1grid)
+  # bVEcurvesSizeT3 <- pbVEcurve(dataSizeT3, s1grid, nBoot)
+  # rejectIndSizeTestTrialEquality <- testTrialEquality2(VEcurveEst, VEcurveEstSizeT3, bVEcurves, bVEcurvesSizeT3)
+  # 
+  # # compute the p-value from the test of equality in two populations under H1
+  # VEcurveEstPowerT3 <- pVEcurve(dataPowerT3, s1grid)
+  # bVEcurvesPowerT3 <- pbVEcurve(dataPowerT3, s1grid, nBoot)
+  # rejectIndPowerTestTrialEquality <- testTrialEquality2(VEcurveEst, VEcurveEstPowerT3, bVEcurves, bVEcurvesPowerT3)
+  # 
+  # return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, rejectIndSizeTestConstancy=rejectIndSizeTestConstancy, rejectIndPowerTestConstancy=rejectIndPowerTestConstancy,
+  #             rejectIndSizeTestTrialEquality=rejectIndSizeTestTrialEquality, rejectIndPowerTestTrialEquality=rejectIndPowerTestTrialEquality))
+  return(list(coverIndIdTransform=coverIdTransform$coverInd, smCoverIndIdTransform=coverIdTransform$smCoverInd, coverIndLogitTransform=coverLogitTransform$coverInd, smCoverIndLogitTransform=coverLogitTransform$smCoverInd))
+}
+
 # 'getEstVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
 getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
@@ -854,6 +1082,13 @@ getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
 getPestVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
   data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
   return(pVEcurve(data=data, s1grid=s1grid))
+}
+
+# 'getPestRisk' performs 1 MC iteration, i.e., it generates the data-set and estimates the risk curve in each treatment group
+# parametric Gaussian density estimation is employed
+getPestRisk <- function(s1grid, n, beta, pi, truncateMarker, seed){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  return(pRiskCurve(data=data, s1grid=s1grid))
 }
 
 # 'getInferenceVE' generates data representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
@@ -895,4 +1130,15 @@ getPinferenceVE2 <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPower
   dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   return(pInferenceVEcurve2(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+}
+
+# 'contrast' could be one of "additive", "logRR", "ve" (currently only "additive" is implemented)
+# 'normTransform' is the normalizing transformation; currently only one of "identity" and "logit"
+getPinferenceMCEPcurve2 <- function(s1grid, trueRiskCurves, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot, contrast="additive"){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT1 <- getData(n=n, beta=betaSizeT1, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  return(pInferenceMCEPcurve2(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueRiskCurves=trueRiskCurves, nBoot=nBoot, 
+                              contrast=contrast))
 }
