@@ -285,8 +285,9 @@ bRiskCurve <- function(data, markerName, iter, saveFile=NULL, saveDir=NULL, seed
   # cbind all bootstrap risk curves
   plaRiskCurveBootEst <- drop(do.call(cbind, lapply(bRiskCurveList,"[[","plaRiskCurve")))
   txRiskCurveBootEst <- drop(do.call(cbind, lapply(bRiskCurveList,"[[","txRiskCurve")))
-  bList <- list(markerVals=markerVals, plaRiskCurveBootEst=plaRiskCurveBootEst, txRiskCurveBootEst=txRiskCurveBootEst, bIdxControls=bSampleControls, bIdxCases=bSampleCases, 
-                cpointP=cpointP, cpointV=cpointV, fOptBandwidths=fbw, gOptBandwidths=gbw, seed=seed)
+  # bList <- list(markerVals=markerVals, plaRiskCurveBootEst=plaRiskCurveBootEst, txRiskCurveBootEst=txRiskCurveBootEst, bIdxControls=bSampleControls, bIdxCases=bSampleCases, 
+  #               cpointP=cpointP, cpointV=cpointV, fOptBandwidths=fbw, gOptBandwidths=gbw, seed=seed)
+  bList <- list(markerVals=markerVals, plaRiskCurveBootEst=plaRiskCurveBootEst, txRiskCurveBootEst=txRiskCurveBootEst)
   
   if (!is.null(saveFile)){
     save(bList, file=file.path(saveDir, saveFile))
