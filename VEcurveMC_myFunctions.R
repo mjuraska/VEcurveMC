@@ -965,6 +965,47 @@ inferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, 
               pSizeTestTrialEquality=pSizeTestTrialEquality, pPowerTestTrialEquality=pPowerTestTrialEquality))
 }
 
+inferenceVEcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
+  VEcurveEst <- VEcurve2(data, s1grid)
+  
+  bVEcurves <- bVEcurve2(data, s1grid, nBoot, VEcurveEst$fbw, VEcurveEst$gbw)
+  
+  # a list with 'coverInd' and 'smCoverInd'
+  cover <- coverVEcurve(VEcurveEst$VEcurvePointEst, bVEcurves, trueVEcurve)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^1_0 under validity of the null
+  VEcurveEstSizeT1 <- VEcurve2(dataSizeT1, s1grid)
+  bVEcurvesSizeT1 <- bVEcurve2(dataSizeT1, s1grid, nBoot, VEcurveEstSizeT1$fbw, VEcurveEstSizeT1$gbw)
+  
+  fit <- glm(Y ~ Z, data=data, family=binomial)
+  prob <- predict(fit, newdata=data.frame(Z=0:1), type="response")
+  overallVE <- 1 - prob[2]/prob[1]
+  rejectIndSizeTestH10 <- testConstancy2(VEcurveEstSizeT1$VEcurvePointEst, bVEcurvesSizeT1, overallVE)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^2_0 under validity of the null
+  rejectIndSizeTestH20 <- testConstancy2(VEcurveEstSizeT1$VEcurvePointEst, bVEcurvesSizeT1, 0.5)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^1_0 under an alternative
+  rejectIndPowerTestH10 <- testConstancy2(VEcurveEst$VEcurvePointEst, bVEcurves, overallVE)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^2_0 under an alternative
+  rejectIndPowerTestH20 <- testConstancy2(VEcurveEst$VEcurvePointEst, bVEcurves, 0.5)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^4_0 under validity of the null
+  VEcurveEstSizeT3 <- VEcurve2(dataSizeT3, s1grid)
+  bVEcurvesSizeT3 <- bVEcurve2(dataSizeT3, s1grid, nBoot, VEcurveEstSizeT3$fbw, VEcurveEstSizeT3$gbw)
+  rejectIndSizeTestH40 <- testTrialEquality2(VEcurveEst$VEcurvePointEst, VEcurveEstSizeT3$VEcurvePointEst, bVEcurves, bVEcurvesSizeT3)
+  
+  # compute the indicator of rejection of the null hypothesis in the test of H^4_0 under an alternative
+  VEcurveEstPowerT3 <- VEcurve2(dataPowerT3, s1grid)
+  bVEcurvesPowerT3 <- bVEcurve2(dataPowerT3, s1grid, nBoot, VEcurveEstPowerT3$fbw, VEcurveEstPowerT3$gbw)
+  rejectIndPowerTestH40 <- testTrialEquality2(VEcurveEst$VEcurvePointEst, VEcurveEstPowerT3$VEcurvePointEst, bVEcurves, bVEcurvesPowerT3)
+  
+  return(list(coverInd=cover$coverInd, smCoverInd=cover$smCoverInd, rejectIndSizeTestH10=rejectIndSizeTestH10, rejectIndPowerTestH10=rejectIndPowerTestH10, 
+              rejectIndSizeTestH20=rejectIndSizeTestH20, rejectIndPowerTestH20=rejectIndPowerTestH20, rejectIndSizeTestH40=rejectIndSizeTestH40, 
+              rejectIndPowerTestH40=rejectIndPowerTestH40))
+}
+
 # parametric Gaussian density estimation is employed
 pInferenceVEcurve <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1grid, trueVEcurve, nBoot){
   VEcurveEst <- pVEcurve(data, s1grid)
@@ -1105,6 +1146,14 @@ getInferenceVE <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3
   dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
   return(inferenceVEcurve(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
+}
+
+getInferenceVE2 <- function(s1grid, trueVEcurve, n, beta, betaSizeT1, betaPowerT3, pi, truncateMarker, seed, nBoot){
+  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT1 <- getData(n=n, beta=betaSizeT1, pi=pi, truncateMarker=truncateMarker, seed=seed)
+  dataSizeT3 <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  dataPowerT3 <- getData(n=n, beta=betaPowerT3, pi=pi, truncateMarker=truncateMarker, seed=seed+100000)
+  return(inferenceVEcurve2(data=data, dataSizeT1=dataSizeT1, dataSizeT3=dataSizeT3, dataPowerT3=dataPowerT3, s1grid=s1grid, trueVEcurve=trueVEcurve, nBoot=nBoot))
 }
 
 # 'getPinferenceVE' generates data representing 1 MC iteration, computes the bootstrap SE based on 'nBoot'
