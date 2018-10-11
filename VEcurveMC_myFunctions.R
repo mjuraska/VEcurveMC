@@ -168,11 +168,11 @@ trueRisk <- function(s1, beta0, beta1, beta2, beta3, meanS0, varS0, meanS1, varS
 # 'beta' is a vector of probit risk model coefficients
 # 'pi' is a sampling probability for sampling a subcohort of controls with biomarker measurements
 # 'truncateMarker' is TRUE indicates truncated marker distributions
-getData <- function(n, beta, pi, truncateMarker, seed){
+getData <- function(n, beta, pi, sigma12, truncateMarker, seed){
   set.seed(seed)
   
   Z <- rep(0:1, each=n/2)
-  S <- mvrnorm(n, mu=c(2,2,3), Sigma=matrix(c(1,0.9,0.7,0.9,1,0.7,0.7,0.7,1), nrow=3))
+  S <- mvrnorm(n, mu=c(2,2,3), Sigma=matrix(c(1,sigma12,0.7,sigma12,1,0.7,0.7,0.7,1), nrow=3))
   if (truncateMarker){
     S <- ifelse(S<1.5, 1.5, S)  
   }
@@ -1113,8 +1113,8 @@ pInferenceMCEPcurve2 <- function(data, dataSizeT1, dataSizeT3, dataPowerT3, s1gr
 }
 
 # 'getEstVE' performs 1 MC iteration, i.e., it generates the data-set and estimates the VE(s1) curve
-getEstVE <- function(s1grid, n, beta, pi, truncateMarker, seed){
-  data <- getData(n=n, beta=beta, pi=pi, truncateMarker=truncateMarker, seed=seed)
+getEstVE <- function(s1grid, n, beta, pi, sigma12, truncateMarker, seed){
+  data <- getData(n=n, beta=beta, pi=pi, sigma12=sigma12, truncateMarker=truncateMarker, seed=seed)
   return(VEcurve(data=data, s1grid=s1grid))
 }
 
